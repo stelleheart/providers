@@ -5,6 +5,7 @@ import type { Qualities } from '@/providers/streams';
 import type { StreamFile } from '@/providers/streams';
 import type { MovieScrapeContext, ShowScrapeContext } from '@/utils/context';
 import { NotFoundError } from '@/utils/errors';
+import { createM3U8ProxyUrl } from '@/utils/proxy';
 
 const API_BASE_URL = 'https://api.1anime.app/anime/animepahe';
 
@@ -51,6 +52,7 @@ interface WatchResponse {
 }
 
 type LanguageBucket = 'jpn' | 'eng';
+const UNSUPPORTED_HLS_AUDIO_CODECS = ['mp4a.40.1'];
 
 function normalizeTitle(input: string): string {
   return input
@@ -75,9 +77,9 @@ function scoreSearchResult(item: SearchItem, title: string, releaseYear: number)
   const normalizedNeedle = normalizeTitle(title);
   const normalizedHaystack = normalizeTitle(item.title);
 
-  let score = 0;
-  if (normalizedHaystack === normalizedNeedle) score += 100;
-  else if (normalizedHaystack.includes(normalizedNeedle) || normalizedNeedle.includes(normalizedHaystack)) score += 50;
+  if (normalizedHaystack !== normalizedNeedle) return Number.NEGATIVE_INFINITY;
+
+  let score = 100;
 
   if (typeof item.releaseDate === 'number') {
     const yearDiff = Math.abs(item.releaseDate - releaseYear);
@@ -90,6 +92,10 @@ function scoreSearchResult(item: SearchItem, title: string, releaseYear: number)
   }
 
   return score;
+}
+
+function isExactTitleMatch(candidateTitle: string, targetTitle: string): boolean {
+  return normalizeTitle(candidateTitle) === normalizeTitle(targetTitle);
 }
 
 function parseQualityLabel(quality: string): Qualities {
@@ -115,6 +121,56 @@ function inferLanguage(quality: string, isDub: boolean): LanguageBucket {
 
 function buildLangStreamId(language: LanguageBucket): string {
   return language === 'eng' ? 'eng-audio' : 'jpn-audio';
+}
+
+function qualityPriority(quality: Qualities): number {
+  if (quality === '4k') return 2160;
+  if (quality === '1080') return 1080;
+  if (quality === '720') return 720;
+  if (quality === '480') return 480;
+  if (quality === '360') return 360;
+  return 0;
+}
+
+function getDeclaredCodecsFromManifest(manifest: string): string[] {
+  const codecs: string[] = [];
+  const codecMatches = manifest.matchAll(/codecs\s*=\s*"([^"]+)"/gi);
+  for (const match of codecMatches) {
+    const value = match[1] ?? '';
+    for (const part of value.split(',')) {
+      const normalized = part.trim().toLowerCase();
+      if (normalized) codecs.push(normalized);
+    }
+  }
+
+  return codecs;
+}
+
+async function isSupportedHlsPlaylist(
+  ctx: ScrapeCtx,
+  playlistUrl: string,
+  headers: Record<string, string>,
+): Promise<boolean> {
+  try {
+    const manifestResponse = await ctx.proxiedFetcher.full(playlistUrl, {
+      method: 'GET',
+      headers,
+    });
+
+    const manifest = typeof manifestResponse.body === 'string' ? manifestResponse.body : String(manifestResponse.body ?? '');
+    if (!manifest) return true;
+
+    const declaredCodecs = getDeclaredCodecsFromManifest(manifest);
+    if (declaredCodecs.length === 0) {
+      // No codec signaling is common on these streams; do not block by default.
+      return true;
+    }
+
+    return !declaredCodecs.some((codec) => UNSUPPORTED_HLS_AUDIO_CODECS.some((unsupported) => codec.includes(unsupported)));
+  } catch {
+    // If probing fails, keep the source and let runtime/stream validation decide.
+    return true;
+  }
 }
 
 async function fetchJson<T>(ctx: ScrapeCtx, url: string): Promise<T> {
@@ -149,8 +205,13 @@ async function findAnimeId(ctx: ScrapeCtx): Promise<string> {
     throw new NotFoundError('Anime not found on 1Anime Pahe');
   }
 
-  const best = candidates
-    .filter((item) => !!item.id)
+  const exactCandidates = candidates.filter((item) => !!item.id && isExactTitleMatch(item.title, ctx.media.title));
+
+  if (!exactCandidates.length) {
+    throw new NotFoundError('No exact anime match found on 1Anime Pahe');
+  }
+
+  const best = exactCandidates
     .map((item) => ({ item, score: scoreSearchResult(item, ctx.media.title, ctx.media.releaseYear) }))
     .sort((a, b) => b.score - a.score)[0]?.item;
 
@@ -190,16 +251,24 @@ async function scrapeCombo(ctx: ScrapeCtx): Promise<SourcererOutput> {
   const watch = await fetchJson<WatchResponse>(ctx, `${API_BASE_URL}/watch?episodeId=${encodeURIComponent(episodeId)}`);
 
   const hlsReferer = watch.headers?.Referer;
+  let hlsOrigin: string | undefined;
+  if (hlsReferer) {
+    try {
+      hlsOrigin = new URL(hlsReferer).origin;
+    } catch {
+      // ignore invalid referer
+    }
+  }
   const sources = watch.sources ?? [];
   const downloads = watch.download ?? [];
 
-  const stream: SourcererOutput['stream'] = [];
   const hlsStreams: NonNullable<SourcererOutput['stream']> = [];
+  const fileStreams: NonNullable<SourcererOutput['stream']> = [];
+  const hlsByLanguage: Partial<Record<LanguageBucket, { quality: Qualities; url: string }>> = {};
   const fileByLanguage: Record<LanguageBucket, Partial<Record<Qualities, StreamFile>>> = {
     jpn: {},
     eng: {},
   };
-  let hlsIndex = 0;
 
   for (const source of sources) {
     if (!source?.url) continue;
@@ -209,16 +278,10 @@ async function scrapeCombo(ctx: ScrapeCtx): Promise<SourcererOutput> {
 
     if (source.isM3U8) {
       if (!hlsReferer) continue;
-      hlsStreams.push({
-        id: `${buildLangStreamId(language)}-hls-${quality}-${hlsIndex++}`,
-        type: 'hls',
-        playlist: source.url,
-        headers: {
-          Referer: hlsReferer,
-        },
-        captions: [],
-        flags: [flags.CORS_ALLOWED],
-      });
+      const existing = hlsByLanguage[language];
+      if (!existing || qualityPriority(quality) > qualityPriority(existing.quality)) {
+        hlsByLanguage[language] = { quality, url: source.url };
+      }
       continue;
     }
 
@@ -240,10 +303,35 @@ async function scrapeCombo(ctx: ScrapeCtx): Promise<SourcererOutput> {
   }
 
   for (const language of ['jpn', 'eng'] as const) {
+    const selected = hlsByLanguage[language];
+    if (!selected) continue;
+
+    const streamHeaders: Record<string, string> = {};
+    if (hlsReferer) streamHeaders.Referer = hlsReferer;
+    if (hlsOrigin) streamHeaders.Origin = hlsOrigin;
+
+    const isSupported = await isSupportedHlsPlaylist(ctx, selected.url, streamHeaders);
+    if (!isSupported) {
+      continue;
+    }
+
+    hlsStreams.push({
+      id: buildLangStreamId(language),
+      type: 'hls',
+      playlist: createM3U8ProxyUrl(selected.url, ctx.features, streamHeaders),
+      headers: Object.keys(streamHeaders).length ? streamHeaders : undefined,
+      // Proxy nested playlists/segments when the runner's proxy path is used.
+      proxyDepth: 2,
+      captions: [],
+      flags: [flags.CORS_ALLOWED],
+    });
+  }
+
+  for (const language of ['jpn', 'eng'] as const) {
     if (Object.keys(fileByLanguage[language]).length === 0) continue;
 
-    stream.push({
-      id: buildLangStreamId(language),
+    fileStreams.push({
+      id: `${buildLangStreamId(language)}-file`,
       type: 'file',
       qualities: fileByLanguage[language],
       captions: [],
@@ -251,19 +339,24 @@ async function scrapeCombo(ctx: ScrapeCtx): Promise<SourcererOutput> {
     });
   }
 
-  // Prefer file streams when available to avoid browser/HLS codec incompatibilities.
-  if (stream.length === 0) {
-    stream.push(...hlsStreams);
+  // Prefer HLS streams so clients that only expose audio choices for HLS can surface sub/dub variants.
+  // Keep file streams as fallback for clients/browsers where the HLS audio codec is unsupported.
+  if (hlsStreams.length > 0) {
+    ctx.progress(95);
+    return {
+      embeds: [],
+      stream: [...hlsStreams, ...fileStreams],
+    };
   }
 
-  if (!stream.length) {
+  if (!fileStreams.length) {
     throw new NotFoundError('No valid streams found on 1Anime Pahe');
   }
 
   ctx.progress(95);
   return {
     embeds: [],
-    stream,
+    stream: fileStreams,
   };
 }
 
