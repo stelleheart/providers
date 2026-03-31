@@ -9,16 +9,8 @@
     "./lib"
   ],
   "exports": {
-    ".": {
-      "import": {
-        "types": "./lib/index.d.ts",
-        "default": "./lib/index.js"
-      },
-      "require": {
-        "types": "./lib/index.d.ts",
-        "default": "./lib/index.umd.cjs"
-      }
-    }
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
   },
   "repository": {
     "type": "git",
@@ -35,7 +27,7 @@
   },
   "homepage": "https://p-stream.github.io/providers/",
   "scripts": {
-    "build": "vite build",
+    "build": "tsdown",
     "cli": "vite-node ./src/dev-cli/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -45,11 +37,10 @@
     "lint": "eslint --ext .ts,.js src/",
     "lint:fix": "eslint --fix --ext .ts,.js src/",
     "lint:report": "eslint --ext .ts,.js --output-file eslint_report.json --format json src/",
-    "prepare": "pnpm run build",
-    "prepublishOnly": "pnpm test && pnpm run lint"
+    "postinstall": "npm run build",
+    "prepublishOnly": "npm test && npm run lint"
   },
   "devDependencies": {
-    "@nabla/vite-plugin-eslint": "^2.0.6",
     "@types/cookie": "^0.6.0",
     "@types/crypto-js": "^4.2.2",
     "@types/node-fetch": "^2.6.13",
@@ -73,17 +64,12 @@
     "node-fetch": "^3.3.2",
     "prettier": "^3.6.2",
     "puppeteer": "^22.15.0",
-    "rollup-plugin-obfuscator": "^1.1.0",
     "spinnies": "^0.5.1",
     "terser": "^5.44.0",
     "tsc-alias": "^1.8.16",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.9.3",
     "undici": "^7.16.0",
-    "vite": "^5.4.21",
-    "vite-node": "^1.6.1",
-    "vite-plugin-dts": "^3.9.1",
-    "vitest": "^1.6.1"
+    "tsdown": "^0.21.7"
   },
   "dependencies": {
     "abort-controller": "^3.0.0",
@@ -97,8 +83,12 @@
     "json5": "^2.2.3",
     "nanoid": "^3.3.11",
     "node-fetch": "^3.3.2",
+    "rolldown-plugin-dts": "^0.23.2",
+    "rollup-plugin-obfuscator": "^1.1.0",
     "set-cookie-parser": "^2.7.1",
+    "tsdown": "^0.21.7",
+    "typescript": "^5.9.3",
     "unpacker": "^1.0.1"
   },
-  "packageManager": "pnpm@9.14.4"
+  "module": "./lib/index.js"
 }
