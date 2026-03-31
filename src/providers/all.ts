@@ -219,7 +219,6 @@ export function gatherAllEmbeds(): Array<Embed> {
     droploadScraper,
     supervideoScraper,
     voeScraper,
-    AnimekaiScraper,
-    animepaheEmbed,
+    AnimekaiScraper
   ];
 }
