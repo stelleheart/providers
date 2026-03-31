@@ -45,7 +45,8 @@
     "lint": "eslint --ext .ts,.js src/",
     "lint:fix": "eslint --fix --ext .ts,.js src/",
     "lint:report": "eslint --ext .ts,.js --output-file eslint_report.json --format json src/",
-    "postinstall": "bun run build",
+    "preinstall": "npx -y only-allow pnpm",
+    "prepare": "pnpm run build",
     "prepublishOnly": "pnpm test && pnpm run lint"
   },
   "devDependencies": {
