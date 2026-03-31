@@ -269,8 +269,8 @@ async function scrapeCombo(ctx: ScrapeCtx): Promise<SourcererOutput> {
 
 export const animepaheScraper = makeSourcerer({
   id: 'animepahe',
-  name: '1Anime (Pahe) 🔥',
-  rank: 999,
+  name: 'AnimePahe 🔥',
+  rank: 201,
   disabled: false,
   flags: [flags.CORS_ALLOWED],
   scrapeShow: scrapeCombo,
