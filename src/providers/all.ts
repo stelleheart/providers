@@ -1,4 +1,4 @@
-import { Embed, Sourcerer } from '@/providers/base';
+import type { Embed, Sourcerer } from '@/providers/base';
 import { AnimekaiScraper } from './embeds/animekai';
 import { animekaiScraper } from './sources/animekai';
 import { FedAPIScraper } from './sources/fedapi';
@@ -73,6 +73,7 @@ import { warezPlayerScraper } from './embeds/warezcdn/warezplayer';
 import { zunimeEmbeds } from './embeds/zunime';
 import { EightStreamScraper } from './sources/8stream';
 import { animeflvScraper } from './sources/animeflv';
+import { animepaheScraper } from './sources/animepahe';
 import { animetsuScraper } from './sources/animetsu';
 import { cinehdplusScraper } from './sources/cinehdplus-es';
 import { coitusScraper } from './sources/coitus';
@@ -130,6 +131,7 @@ export function gatherAllSources(): Array<Sourcerer> {
     EightStreamScraper,
     wecimaScraper,
     animeflvScraper,
+    animepaheScraper,
     animekaiScraper,
     FedAPIScraper,
     FedAPIDBScraper,
@@ -218,5 +220,6 @@ export function gatherAllEmbeds(): Array<Embed> {
     supervideoScraper,
     voeScraper,
     AnimekaiScraper,
+    animepaheEmbed,
   ];
 }
