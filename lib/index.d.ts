@@ -108,6 +108,7 @@ type FetcherOptions = {
   readHeaders?: string[];
   body?: Record<string, any> | string | FormData$1 | URLSearchParams;
   credentials?: 'include' | 'same-origin' | 'omit';
+  timeoutMs?: number;
 };
 type DefaultedFetcherOptions = {
   baseUrl?: string;
@@ -117,6 +118,7 @@ type DefaultedFetcherOptions = {
   readHeaders: string[];
   method: 'HEAD' | 'GET' | 'POST';
   credentials?: 'include' | 'same-origin' | 'omit';
+  timeoutMs?: number;
 };
 type FetcherResponse<T = any> = {
   statusCode: number;

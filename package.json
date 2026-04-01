@@ -28,7 +28,7 @@
   "homepage": "https://p-stream.github.io/providers/",
   "scripts": {
     "build": "tsdown",
-    "cli": "vite-node ./src/dev-cli/index.ts",
+    "cli": "bun run ./src/dev-cli/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:providers": "cross-env MW_TEST_PROVIDERS=true vitest run --reporter verbose",
@@ -73,6 +73,7 @@
     "undici": "^7.16.0"
   },
   "dependencies": {
+    "@stablelib/xchacha20poly1305": "^2.0.1",
     "abort-controller": "^3.0.0",
     "cheerio": "1.0.0-rc.12",
     "cookie": "^0.6.0",
@@ -88,6 +89,7 @@
     "rollup-plugin-obfuscator": "^1.1.0",
     "set-cookie-parser": "^2.7.1",
     "tsdown": "^0.21.7",
+    "twofish-ts": "^1.0.2",
     "typescript": "^5.9.3",
     "unpacker": "^1.0.1"
   },

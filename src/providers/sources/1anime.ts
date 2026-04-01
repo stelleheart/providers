@@ -1,5 +1,5 @@
 import { XChaCha20Poly1305 } from '@stablelib/xchacha20poly1305';
-import { twofish } from 'twofish';
+import { encrypt, makeSession } from 'twofish-ts';
 
 import { flags } from '@/entrypoint/utils/targets';
 import { makeSourcerer } from '@/providers/base';
@@ -19,7 +19,8 @@ const ONEANIME_STREAM_TIMEOUT_MS = 45000;
 const PROVIDERS_IN_ORDER = ['ZenV2', 'Zen', 'PaheV2', 'Pahe', 'Kiwi', 'Gogo', 'Kai', 'Zone', 'Nexus'] as const;
 const SUB_OR_DUB_ORDER = ['s', 'd'] as const;
 
-const TWOFISH_KEY = base64ToBytes('aBwDLkNM5v5kPVEWTSOhJZpzWooaRjFTgBTJGfjIf6M=');
+const TWOFISH_KEY = base64ToBytes('aBwDLkNM5v5kPVEWTSOhJZpzWooaRjFTgBTJGfjIf6M=').slice(0, 32);
+const TWOFISH_SESSION = makeSession(TWOFISH_KEY);
 const XCHACHA_KEY = base64ToBytes('i9RmtcQwwLna5C6TlEJ58fHVtU2MHuajPxosbntOCC0=');
 const XOR_KEYS = [
   'Rc1T3cV0m+q/ulaUm+sm/inoPtTptyXeYI74ZWO0Odw=',
@@ -147,10 +148,10 @@ function decryptTwofishCtr(input: Uint8Array): Uint8Array {
   const counter = input.slice(0, 16);
   const encrypted = input.slice(16);
   const out = new Uint8Array(encrypted.length);
-  const cipher = twofish([]);
 
   for (let offset = 0; offset < encrypted.length; offset += 16) {
-    const keystream = cipher.encrypt(Array.from(TWOFISH_KEY), Array.from(counter));
+    const keystream = new Uint8Array(16);
+    encrypt(counter, 0, keystream, 0, TWOFISH_SESSION);
     const blockEnd = Math.min(offset + 16, encrypted.length);
 
     for (let i = offset; i < blockEnd; i += 1) {
