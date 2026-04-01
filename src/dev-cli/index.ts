@@ -2,7 +2,7 @@
 
 import { program } from 'commander';
 import dotenv from 'dotenv';
-import { prompt } from 'enquirer';
+const { prompt } = require('enquirer');
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
 
 import { runRankManager } from '@/dev-cli/rank';
