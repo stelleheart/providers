@@ -70,11 +70,284 @@ type FoundProviderStreams = {
   streamsByLanguage: Partial<Record<LanguageBucket, DecryptedStreamPayload>>;
 };
 
+type AnilistFormat = 'TV' | 'TV_SHORT' | 'MOVIE' | 'SPECIAL' | 'OVA' | 'ONA' | 'MUSIC' | 'MANGA' | 'NOVEL' | 'ONE_SHOT';
+
+type AnilistSearchMedia = {
+  id: number;
+  format: AnilistFormat;
+  seasonYear?: number;
+  episodes?: number;
+  title: {
+    romaji: string;
+    english?: string;
+    native?: string;
+  };
+  synonyms?: string[];
+};
+
+type AnilistSearchResponse = {
+  data?: {
+    Page?: {
+      media?: AnilistSearchMedia[];
+    };
+  };
+};
+
+const ANILIST_SEARCH_QUERY = `
+query ($search: String!, $type: MediaType) {
+  Page(page: 1, perPage: 20) {
+    media(search: $search, type: $type, sort: POPULARITY_DESC) {
+      id
+      format
+      seasonYear
+      episodes
+      title {
+        romaji
+        english
+        native
+      }
+      synonyms
+    }
+  }
+}
+`;
+
+const TITLE_SUFFIXES_TO_STRIP = [
+  'the movie',
+  'movie',
+  'the film',
+  'film',
+  'the series',
+  'series',
+  'special',
+] as const;
+
+const MIN_ANILIST_CONFIDENCE_SCORE = 70;
+
 function rot13(input: string): string {
   return input.replace(/[A-Za-z]/g, (char) => {
     const base = char <= 'Z' ? 65 : 97;
     return String.fromCharCode(((char.charCodeAt(0) - base + 13) % 26) + base);
   });
+}
+
+function normalizeMatchTitle(input: string): string {
+  return input
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripKnownSuffixes(title: string): string {
+  let cleaned = title.trim();
+
+  for (const suffix of TITLE_SUFFIXES_TO_STRIP) {
+    const pattern = new RegExp(`(?:\\s*[:\\-]\\s*)?${suffix}$`, 'i');
+    if (pattern.test(cleaned)) {
+      cleaned = cleaned.replace(pattern, '').trim();
+    }
+  }
+
+  return cleaned;
+}
+
+function buildTitleAliases(title: string): string[] {
+  const aliases = new Set<string>();
+  const trimmed = title.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const stripped = stripKnownSuffixes(trimmed);
+  const colonParts = stripped.split(':').map((part) => part.trim()).filter(Boolean);
+
+  aliases.add(trimmed);
+  aliases.add(stripped);
+  for (const part of colonParts) {
+    aliases.add(part);
+  }
+
+  return [...aliases].filter(Boolean);
+}
+
+function tokenizeTitle(input: string): string[] {
+  return normalizeMatchTitle(input)
+    .split(' ')
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function tokenDiceCoefficient(a: string, b: string): number {
+  const aTokens = tokenizeTitle(a);
+  const bTokens = tokenizeTitle(b);
+  if (!aTokens.length || !bTokens.length) {
+    return 0;
+  }
+
+  const aCounts = new Map<string, number>();
+  const bCounts = new Map<string, number>();
+
+  for (const token of aTokens) {
+    aCounts.set(token, (aCounts.get(token) ?? 0) + 1);
+  }
+  for (const token of bTokens) {
+    bCounts.set(token, (bCounts.get(token) ?? 0) + 1);
+  }
+
+  let intersection = 0;
+  for (const [token, countA] of aCounts.entries()) {
+    const countB = bCounts.get(token) ?? 0;
+    intersection += Math.min(countA, countB);
+  }
+
+  return (2 * intersection) / (aTokens.length + bTokens.length);
+}
+
+function isShowFormat(format: AnilistFormat): boolean {
+  return ['TV', 'TV_SHORT', 'SPECIAL', 'OVA', 'ONA'].includes(format);
+}
+
+function matchesMediaType(media: ScrapeCtx['media'], candidate: AnilistSearchMedia): boolean {
+  if (media.type === 'movie') {
+    return candidate.format === 'MOVIE';
+  }
+  return isShowFormat(candidate.format);
+}
+
+function scoreTitleMatch(alias: string, candidateTitle: string): number {
+  const normalizedAlias = normalizeMatchTitle(alias);
+  const normalizedCandidate = normalizeMatchTitle(candidateTitle);
+  if (!normalizedAlias || !normalizedCandidate) {
+    return 0;
+  }
+
+  if (normalizedAlias === normalizedCandidate) {
+    return 120;
+  }
+
+  let score = tokenDiceCoefficient(normalizedAlias, normalizedCandidate) * 100;
+  if (normalizedCandidate.includes(normalizedAlias) || normalizedAlias.includes(normalizedCandidate)) {
+    score += 12;
+  }
+
+  return score;
+}
+
+function scoreYearMatch(targetYear: number, candidateYear?: number): number {
+  if (!candidateYear) {
+    return 0;
+  }
+
+  const diff = Math.abs(candidateYear - targetYear);
+  if (diff === 0) {
+    return 30;
+  }
+  if (diff === 1) {
+    return 18;
+  }
+  if (diff === 2) {
+    return 8;
+  }
+  return -Math.min(20, diff * 4);
+}
+
+function scoreEpisodeCountMatch(media: ScrapeCtx['media'], candidateEpisodeCount?: number): number {
+  const targetEpisodeCount = media.type === 'movie' ? 1 : media.season.episodeCount;
+  if (!targetEpisodeCount || !candidateEpisodeCount) {
+    return 0;
+  }
+
+  const diff = Math.abs(targetEpisodeCount - candidateEpisodeCount);
+  if (diff === 0) {
+    return 20;
+  }
+  if (diff <= 2) {
+    return 12;
+  }
+  if (diff <= 5) {
+    return 5;
+  }
+  return -Math.min(15, diff);
+}
+
+function scoreAnilistCandidate(media: ScrapeCtx['media'], aliases: string[], candidate: AnilistSearchMedia): number {
+  const titlePool = [candidate.title.romaji, candidate.title.english, candidate.title.native, ...(candidate.synonyms ?? [])]
+    .filter((title): title is string => !!title)
+    .slice(0, 20);
+
+  let bestTitleScore = 0;
+  for (const alias of aliases) {
+    for (const candidateTitle of titlePool) {
+      const score = scoreTitleMatch(alias, candidateTitle);
+      if (score > bestTitleScore) {
+        bestTitleScore = score;
+      }
+    }
+  }
+
+  let score = bestTitleScore;
+  score += scoreYearMatch(media.releaseYear, candidate.seasonYear);
+  score += scoreEpisodeCountMatch(media, candidate.episodes);
+  score += matchesMediaType(media, candidate) ? 25 : -25;
+
+  if (media.type === 'movie' && candidate.format === 'MOVIE') {
+    score += 10;
+  }
+
+  return score;
+}
+
+async function searchAnilistCandidates(ctx: ScrapeCtx, query: string): Promise<AnilistSearchMedia[]> {
+  const response = await ctx.proxiedFetcher<AnilistSearchResponse>('', {
+    baseUrl: 'https://graphql.anilist.co',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      query: ANILIST_SEARCH_QUERY,
+      variables: {
+        search: query,
+        type: 'ANIME',
+      },
+    }),
+  });
+
+  return response.data?.Page?.media ?? [];
+}
+
+async function resolveAnilistIdWithFuzzyMatching(ctx: ScrapeCtx): Promise<number> {
+  const aliases = buildTitleAliases(ctx.media.title);
+  if (!aliases.length) {
+    return getAnilistIdFromMedia(ctx, ctx.media);
+  }
+
+  const byId = new Map<number, AnilistSearchMedia>();
+  for (const alias of aliases) {
+    const items = await searchAnilistCandidates(ctx, alias);
+    for (const item of items) {
+      if (item?.id) {
+        byId.set(item.id, item);
+      }
+    }
+  }
+
+  const scored = [...byId.values()]
+    .map((candidate) => ({
+      candidate,
+      score: scoreAnilistCandidate(ctx.media, aliases, candidate),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  if (scored[0] && scored[0].score >= MIN_ANILIST_CONFIDENCE_SCORE) {
+    return scored[0].candidate.id;
+  }
+
+  return getAnilistIdFromMedia(ctx, ctx.media);
 }
 
 function parseQualityLabel(quality: string): Qualities {
@@ -344,7 +617,7 @@ async function findWorkingProvider(
 
 async function scrape1anime(ctx: ScrapeCtx): Promise<SourcererOutput> {
   ctx.progress(15);
-  const anilistId = await getAnilistIdFromMedia(ctx, ctx.media);
+  const anilistId = await resolveAnilistIdWithFuzzyMatching(ctx);
 
   ctx.progress(35);
   const episodeNumber = ctx.media.type === 'movie' ? 1 : ctx.media.episode.number;
