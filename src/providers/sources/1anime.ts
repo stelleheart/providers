@@ -11,7 +11,19 @@ import { NotFoundError } from '@/utils/errors';
 import { createM3U8ProxyUrl } from '@/utils/proxy';
 
 function base64ToBytes(input: string): Uint8Array {
-  return new Uint8Array(Buffer.from(input, 'base64'));
+  const normalized = input.replace(/\s+/g, '');
+  const binary = atob(normalized);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return bytes;
+}
+
+function base64ToUtf8(input: string): string {
+  return new TextDecoder().decode(base64ToBytes(input));
 }
 
 const ONEANIME_API_BASE = 'https://1anime.app/api';
@@ -194,7 +206,7 @@ function decryptXChaCha(input: Uint8Array): Uint8Array {
 }
 
 function decodeStreamBlob(result: string): DecryptedStreamPayload {
-  const afterFirstBase64 = Buffer.from(result, 'base64').toString('utf8');
+  const afterFirstBase64 = base64ToUtf8(result);
   const afterRot13 = rot13(afterFirstBase64);
   const afterURIComponent = decodeURIComponent(afterRot13);
   const afterSecondBase64 = base64ToBytes(afterURIComponent);
@@ -432,7 +444,7 @@ async function scrape1anime(ctx: ScrapeCtx): Promise<SourcererOutput> {
 export const oneanimeScraper = makeSourcerer({
   id: '1anime',
   name: '1Anime 🔥',
-  rank: 301,
+  rank: 202,
   disabled: false,
   flags: [flags.CORS_ALLOWED],
   scrapeShow: scrape1anime,
