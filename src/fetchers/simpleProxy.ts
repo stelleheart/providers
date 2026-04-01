@@ -1,7 +1,7 @@
 import { makeFullUrl } from '@/fetchers/common';
-import { FetchLike } from '@/fetchers/fetch';
+import type { FetchLike } from '@/fetchers/fetch';
 import { makeStandardFetcher } from '@/fetchers/standardFetch';
-import { Fetcher } from '@/fetchers/types';
+import type { Fetcher } from '@/fetchers/types';
 
 const headerMap: Record<string, string> = {
   cookie: 'X-Cookie',
@@ -20,7 +20,7 @@ export function makeSimpleProxyFetcher(proxyUrl: string, f: FetchLike): Fetcher 
     const fetcher = makeStandardFetcher(async (a, b) => {
       // AbortController
       const controller = new AbortController();
-      const timeout = 20000; // 20s timeout
+      const timeout = ops.timeoutMs ?? 20000;
       const timeoutId = setTimeout(() => controller.abort(), timeout);
 
       try {
@@ -45,8 +45,8 @@ export function makeSimpleProxyFetcher(proxyUrl: string, f: FetchLike): Fetcher 
         // set correct final url
         res.extraUrl = res.headers.get('X-Final-Destination') ?? res.url;
         return res;
-      } catch (error: any) {
-        if (error.name === 'AbortError') {
+      } catch (error: unknown) {
+        if (error instanceof Error && error.name === 'AbortError') {
           throw new Error(`Fetch request to ${a} timed out after ${timeout}ms`);
         }
         throw error;

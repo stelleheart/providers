@@ -1,7 +1,7 @@
 import { serializeBody } from '@/fetchers/body';
 import { makeFullUrl } from '@/fetchers/common';
-import { FetchLike, FetchReply } from '@/fetchers/fetch';
-import { Fetcher } from '@/fetchers/types';
+import type { FetchLike, FetchReply } from '@/fetchers/fetch';
+import type { Fetcher } from '@/fetchers/types';
 
 function getHeaders(list: string[], res: FetchReply): Headers {
   const output = new Headers();
@@ -23,7 +23,7 @@ export function makeStandardFetcher(f: FetchLike): Fetcher {
 
     // AbortController
     const controller = new AbortController();
-    const timeout = 15000; // 15s timeout
+    const timeout = ops.timeoutMs ?? 15000;
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
@@ -40,7 +40,7 @@ export function makeStandardFetcher(f: FetchLike): Fetcher {
 
       clearTimeout(timeoutId);
 
-      let body: any;
+      let body: unknown;
       const contentType = res.headers.get('content-type')?.toLowerCase();
       const isJson = contentType?.includes('application/json');
       const isBinary =
@@ -65,8 +65,8 @@ export function makeStandardFetcher(f: FetchLike): Fetcher {
         headers: getHeaders(ops.readHeaders, res),
         statusCode: res.status,
       };
-    } catch (error: any) {
-      if (error.name === 'AbortError') {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
         throw new Error(`Fetch request to ${fullUrl} timed out after ${timeout}ms`);
       }
       throw error;
