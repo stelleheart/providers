@@ -1,4 +1,4 @@
-import * as FormData from 'form-data';
+import type * as FormData from 'form-data';
 
 export type FetcherOptions = {
   baseUrl?: string;
@@ -8,6 +8,7 @@ export type FetcherOptions = {
   readHeaders?: string[];
   body?: Record<string, any> | string | FormData | URLSearchParams;
   credentials?: 'include' | 'same-origin' | 'omit';
+  timeoutMs?: number;
 };
 
 // Version of the options that always has the defaults set
@@ -20,6 +21,7 @@ export type DefaultedFetcherOptions = {
   readHeaders: string[];
   method: 'HEAD' | 'GET' | 'POST';
   credentials?: 'include' | 'same-origin' | 'omit';
+  timeoutMs?: number;
 };
 
 export type FetcherResponse<T = any> = {
