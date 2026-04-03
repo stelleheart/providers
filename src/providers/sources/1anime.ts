@@ -301,7 +301,7 @@ function scoreAnilistCandidate(media: ScrapeCtx['media'], aliases: string[], can
 }
 
 async function searchAnilistCandidates(ctx: ScrapeCtx, query: string): Promise<AnilistSearchMedia[]> {
-  const response = await ctx.proxiedFetcher<AnilistSearchResponse>('', {
+  const response = await ctx.fetcher<AnilistSearchResponse>('', {
     baseUrl: 'https://graphql.anilist.co',
     method: 'POST',
     headers: {

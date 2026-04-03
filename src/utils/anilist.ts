@@ -60,7 +60,7 @@ export async function getAnilistIdFromMedia(ctx: ScrapeContext, media: MovieMedi
   const cached = cache.get(key);
   if (cached) return cached;
 
-  const res = await ctx.proxiedFetcher<AnilistSearchResponse>('', {
+  const res = await ctx.fetcher<AnilistSearchResponse>('', {
     baseUrl: 'https://graphql.anilist.co',
     method: 'POST',
     headers: {
@@ -136,7 +136,7 @@ type AnilistTitlesResponse = {
 
 export async function getAnilistTitles(ctx: ScrapeContext, media: MovieMedia | ShowMedia): Promise<string[]> {
   const id = await getAnilistIdFromMedia(ctx, media);
-  const res = await ctx.proxiedFetcher<AnilistTitlesResponse>('', {
+  const res = await ctx.fetcher<AnilistTitlesResponse>('', {
     baseUrl: 'https://graphql.anilist.co',
     method: 'POST',
     headers: {
@@ -168,7 +168,7 @@ export async function getAnilistEnglishTitle(
   media: MovieMedia | ShowMedia,
 ): Promise<string | null> {
   const id = await getAnilistIdFromMedia(ctx, media);
-  const res = await ctx.proxiedFetcher<AnilistTitlesResponse>('', {
+  const res = await ctx.fetcher<AnilistTitlesResponse>('', {
     baseUrl: 'https://graphql.anilist.co',
     method: 'POST',
     headers: {
