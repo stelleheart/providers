@@ -3,6 +3,7 @@ import { makeSourcerer } from '@/providers/base';
 import type { SourcererOutput } from '@/providers/base';
 import type { Qualities } from '@/providers/streams';
 import type { StreamFile } from '@/providers/streams';
+import { getAnilistTitles } from '@/utils/anilist';
 import type { MovieScrapeContext, ShowScrapeContext } from '@/utils/context';
 import { NotFoundError } from '@/utils/errors';
 import { createM3U8ProxyUrl } from '@/utils/proxy';
@@ -53,6 +54,9 @@ interface WatchResponse {
 
 type LanguageBucket = 'jpn' | 'eng';
 const UNSUPPORTED_HLS_AUDIO_CODECS = ['mp4a.40.1'];
+const TITLE_SUFFIXES_TO_STRIP = ['the movie', 'movie', 'the film', 'film', 'special', 'the series', 'series'] as const;
+const MIN_MATCH_CONFIDENCE = 70;
+const MAX_CANDIDATES_FOR_INFO_PROBE = 5;
 
 function normalizeTitle(input: string): string {
   return input
@@ -73,29 +77,165 @@ function buildSearchPath(query: string): string {
     .join('+');
 }
 
-function scoreSearchResult(item: SearchItem, title: string, releaseYear: number): number {
-  const normalizedNeedle = normalizeTitle(title);
-  const normalizedHaystack = normalizeTitle(item.title);
+function stripKnownSuffixes(title: string): string {
+  let cleaned = title.trim();
 
-  if (normalizedHaystack !== normalizedNeedle) return Number.NEGATIVE_INFINITY;
-
-  let score = 100;
-
-  if (typeof item.releaseDate === 'number') {
-    const yearDiff = Math.abs(item.releaseDate - releaseYear);
-    score += Math.max(0, 10 - yearDiff);
+  for (const suffix of TITLE_SUFFIXES_TO_STRIP) {
+    const pattern = new RegExp(`(?:\\s*[:\\-]\\s*)?${suffix}$`, 'i');
+    if (pattern.test(cleaned)) {
+      cleaned = cleaned.replace(pattern, '').trim();
+    }
   }
 
-  const itemType = item.type?.toLowerCase() ?? '';
-  if (itemType.includes('tv') || itemType.includes('movie')) {
-    score += 5;
+  return cleaned;
+}
+
+function buildTitleAliases(title: string): string[] {
+  const aliases = new Set<string>();
+  const trimmed = title.trim();
+
+  if (!trimmed) {
+    return [];
+  }
+
+  const stripped = stripKnownSuffixes(trimmed);
+  const colonParts = stripped
+    .split(':')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  aliases.add(trimmed);
+  aliases.add(stripped);
+  for (const part of colonParts) {
+    aliases.add(part);
+  }
+
+  return [...aliases].filter(Boolean);
+}
+
+function tokenizeTitle(input: string): string[] {
+  return normalizeTitle(input)
+    .split(' ')
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function tokenDiceCoefficient(a: string, b: string): number {
+  const aTokens = tokenizeTitle(a);
+  const bTokens = tokenizeTitle(b);
+
+  if (!aTokens.length || !bTokens.length) {
+    return 0;
+  }
+
+  const aCounts = new Map<string, number>();
+  const bCounts = new Map<string, number>();
+
+  for (const token of aTokens) {
+    aCounts.set(token, (aCounts.get(token) ?? 0) + 1);
+  }
+  for (const token of bTokens) {
+    bCounts.set(token, (bCounts.get(token) ?? 0) + 1);
+  }
+
+  let intersection = 0;
+  for (const [token, countA] of aCounts.entries()) {
+    const countB = bCounts.get(token) ?? 0;
+    intersection += Math.min(countA, countB);
+  }
+
+  return (2 * intersection) / (aTokens.length + bTokens.length);
+}
+
+function scoreTitleMatch(alias: string, candidateTitle: string): number {
+  const normalizedAlias = normalizeTitle(alias);
+  const normalizedCandidate = normalizeTitle(candidateTitle);
+
+  if (!normalizedAlias || !normalizedCandidate) {
+    return 0;
+  }
+
+  if (normalizedAlias === normalizedCandidate) {
+    return 120;
+  }
+
+  let score = tokenDiceCoefficient(normalizedAlias, normalizedCandidate) * 100;
+  if (normalizedCandidate.includes(normalizedAlias) || normalizedAlias.includes(normalizedCandidate)) {
+    score += 12;
   }
 
   return score;
 }
 
-function isExactTitleMatch(candidateTitle: string, targetTitle: string): boolean {
-  return normalizeTitle(candidateTitle) === normalizeTitle(targetTitle);
+function scoreYearMatch(targetYear: number, candidateYear?: number): number {
+  if (!candidateYear) {
+    return 0;
+  }
+
+  const diff = Math.abs(candidateYear - targetYear);
+  if (diff === 0) {
+    return 30;
+  }
+  if (diff === 1) {
+    return 18;
+  }
+  if (diff === 2) {
+    return 8;
+  }
+
+  return -Math.min(20, diff * 4);
+}
+
+function scoreTypeHint(mediaType: ScrapeCtx['media']['type'], candidateType?: string): number {
+  if (!candidateType) {
+    return 0;
+  }
+
+  const normalized = candidateType.toLowerCase();
+  if (mediaType === 'movie') {
+    return normalized.includes('movie') ? 15 : -10;
+  }
+
+  if (normalized.includes('tv') || normalized.includes('series') || normalized.includes('ona') || normalized.includes('ova')) {
+    return 15;
+  }
+
+  return -10;
+}
+
+function scoreEpisodeCountMatch(media: ScrapeCtx['media'], candidateEpisodeCount: number): number {
+  const targetEpisodeCount = media.type === 'movie' ? 1 : media.season.episodeCount;
+  if (!targetEpisodeCount) {
+    return 0;
+  }
+
+  const diff = Math.abs(targetEpisodeCount - candidateEpisodeCount);
+  if (diff === 0) {
+    return 20;
+  }
+  if (diff <= 2) {
+    return 12;
+  }
+  if (diff <= 5) {
+    return 5;
+  }
+
+  return -Math.min(15, diff);
+}
+
+function scoreSearchCandidate(item: SearchItem, aliases: string[], media: ScrapeCtx['media']): number {
+  let bestTitleScore = 0;
+  for (const alias of aliases) {
+    const score = scoreTitleMatch(alias, item.title);
+    if (score > bestTitleScore) {
+      bestTitleScore = score;
+    }
+  }
+
+  let score = bestTitleScore;
+  score += scoreYearMatch(media.releaseYear, item.releaseDate);
+  score += scoreTypeHint(media.type, item.type);
+  return score;
 }
 
 function parseQualityLabel(quality: string): Qualities {
@@ -174,7 +314,6 @@ async function isSupportedHlsPlaylist(
 }
 
 async function fetchJson<T>(ctx: ScrapeCtx, url: string): Promise<T> {
-  console.log(`Fetching URL: ${url}`);
   const response = await ctx.proxiedFetcher<T | string>(url);
 
   if (typeof response === 'string') {
@@ -197,29 +336,75 @@ async function fetchJson<T>(ctx: ScrapeCtx, url: string): Promise<T> {
 }
 
 async function findAnimeId(ctx: ScrapeCtx): Promise<string> {
-  const queryPath = buildSearchPath(ctx.media.title);
-  const response = await fetchJson<SearchResponse>(ctx, `${API_BASE_URL}/${queryPath}`);
-  const candidates = response.results ?? [];
+  const aliases = new Set<string>(buildTitleAliases(ctx.media.title));
+  try {
+    const anilistTitles = await getAnilistTitles(ctx, ctx.media);
+    for (const title of anilistTitles) {
+      for (const alias of buildTitleAliases(title)) {
+        aliases.add(alias);
+      }
+    }
+  } catch {
+    // Keep matching resilient even if AniList title enrichment fails.
+  }
 
-  if (!candidates.length) {
+  const searchAliases = [...aliases];
+  if (!searchAliases.length) {
     throw new NotFoundError('Anime not found on 1Anime Pahe');
   }
 
-  const exactCandidates = candidates.filter((item) => !!item.id && isExactTitleMatch(item.title, ctx.media.title));
+  const byId = new Map<string, SearchItem>();
+  for (const alias of searchAliases) {
+    const queryPath = buildSearchPath(alias);
+    const response = await fetchJson<SearchResponse>(ctx, `${API_BASE_URL}/${queryPath}`);
+    const candidates = response.results ?? [];
 
-  if (!exactCandidates.length) {
-    throw new NotFoundError('No exact anime match found on 1Anime Pahe');
+    for (const candidate of candidates) {
+      if (candidate?.id) {
+        byId.set(candidate.id, candidate);
+      }
+    }
   }
 
-  const best = exactCandidates
-    .map((item) => ({ item, score: scoreSearchResult(item, ctx.media.title, ctx.media.releaseYear) }))
-    .sort((a, b) => b.score - a.score)[0]?.item;
+  const dedupedCandidates = [...byId.values()];
+  if (!dedupedCandidates.length) {
+    throw new NotFoundError('Anime not found on 1Anime Pahe');
+  }
 
-  if (!best) {
+  const scored = dedupedCandidates
+    .map((item) => ({ item, score: scoreSearchCandidate(item, searchAliases, ctx.media) }))
+    .sort((a, b) => b.score - a.score);
+
+  const refined = [...scored];
+  const targetEpisodeNumber = ctx.media.type === 'movie' ? 1 : ctx.media.episode.number;
+  for (const candidate of refined.slice(0, MAX_CANDIDATES_FOR_INFO_PROBE)) {
+    try {
+      const info = await fetchJson<InfoResponse>(ctx, `${API_BASE_URL}/info/${encodeURIComponent(candidate.item.id)}`);
+      const episodes = info.episodes ?? [];
+      if (!episodes.length) {
+        continue;
+      }
+
+      candidate.score += scoreEpisodeCountMatch(ctx.media, episodes.length);
+      const hasTargetEpisode = episodes.some((entry) => entry.number === targetEpisodeNumber);
+      if (hasTargetEpisode) {
+        candidate.score += 15;
+      } else {
+        candidate.score -= 10;
+      }
+    } catch {
+      // Ignore info probing failures and keep base score.
+    }
+  }
+
+  refined.sort((a, b) => b.score - a.score);
+  const best = refined[0];
+
+  if (!best || best.score < MIN_MATCH_CONFIDENCE) {
     throw new NotFoundError('No usable anime result on 1Anime Pahe');
   }
 
-  return best.id;
+  return best.item.id;
 }
 
 async function resolveEpisodeId(ctx: ScrapeCtx, animeId: string): Promise<string> {
