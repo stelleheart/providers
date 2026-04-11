@@ -14,6 +14,8 @@ import type { CaptionType } from '../captions';
 const MIRURO_BASE_URL = 'https://miruro.to';
 const MIRURO_PIPE_PATH = '/api/secure/pipe';
 const MIRURO_VERSION = '0.2.0';
+const MIRURO_SOURCE_ATTEMPT_TIMEOUT_MS = 4500;
+const MIRURO_MAX_CONCURRENT_SOURCE_ATTEMPTS = 5;
 const MIRURO_XOR_KEY = new Uint8Array(
   ('71951034f8fbcf53d89db52ceb3dc22c'.match(/.{2}/g) || []).map((part) => parseInt(part, 16)),
 );
@@ -137,6 +139,7 @@ async function miruroPipeRequest<T>(
   ctx: ScrapeCtx,
   path: string,
   query: Record<string, string>,
+  timeoutMs?: number,
 ): Promise<T> {
   const encodedRequest = toBase64UrlJson({
     path,
@@ -154,6 +157,7 @@ async function miruroPipeRequest<T>(
       Origin: MIRURO_BASE_URL,
     },
     readHeaders: ['x-obfuscated'],
+    timeoutMs,
   });
 
   if (typeof response.body !== 'string') {
@@ -265,24 +269,95 @@ type BestCategoryCandidate = {
   isHls: boolean;
 };
 
+type SourceAttemptTask = {
+  providerId: string;
+  episode: EpisodeCandidate;
+};
+
+type SourceAttemptCache = Map<string, Promise<MiruroSourcesResponse | undefined>>;
+
+function isBetterCandidate(next: BestCategoryCandidate, current?: BestCategoryCandidate): boolean {
+  if (!current) return true;
+  if (next.captionCount > current.captionCount) return true;
+  if (next.captionCount === current.captionCount && next.isHls && !current.isHls) return true;
+  return false;
+}
+
+function createSourceAttemptCacheKey(requestedCategory: string, providerId: string, episodeId: string): string {
+  return `${requestedCategory}::${providerId}::${episodeId}`;
+}
+
+async function getSourcesForAttempt(
+  ctx: ScrapeCtx,
+  requestedCategory: string,
+  providerId: string,
+  episodeId: string,
+  cache: SourceAttemptCache,
+): Promise<MiruroSourcesResponse | undefined> {
+  const key = createSourceAttemptCacheKey(requestedCategory, providerId, episodeId);
+
+  const cached = cache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const requestPromise = (async () => {
+    try {
+      return await miruroPipeRequest<MiruroSourcesResponse>(
+        ctx,
+        'sources',
+        {
+          episodeId,
+          provider: providerId,
+          category: requestedCategory,
+        },
+        MIRURO_SOURCE_ATTEMPT_TIMEOUT_MS,
+      );
+    } catch {
+      return undefined;
+    }
+  })();
+
+  cache.set(key, requestPromise);
+  return requestPromise;
+}
+
 async function findBestCategoryStream(
   ctx: ScrapeCtx,
   providers: string[],
   requestedCategory: string,
   episodeCandidates: EpisodeCandidate[],
+  sourceAttemptCache: SourceAttemptCache,
 ): Promise<BestCategoryCandidate | undefined> {
   let bestCandidate: BestCategoryCandidate | undefined;
 
+  const tasks: SourceAttemptTask[] = [];
   for (const providerId of providers) {
     for (const episode of episodeCandidates) {
-      let sourcesData: MiruroSourcesResponse;
-      try {
-        sourcesData = await miruroPipeRequest<MiruroSourcesResponse>(ctx, 'sources', {
-          episodeId: episode.id,
-          provider: providerId,
-          category: requestedCategory,
-        });
-      } catch {
+      tasks.push({ providerId, episode });
+    }
+  }
+
+  let nextTaskIndex = 0;
+  let stopEarly = false;
+
+  async function worker(): Promise<void> {
+    while (true) {
+      if (stopEarly) return;
+
+      const taskIndex = nextTaskIndex;
+      nextTaskIndex += 1;
+      if (taskIndex >= tasks.length) return;
+
+      const task = tasks[taskIndex];
+      const sourcesData = await getSourcesForAttempt(
+        ctx,
+        requestedCategory,
+        task.providerId,
+        task.episode.id,
+        sourceAttemptCache,
+      );
+      if (!sourcesData) {
         continue;
       }
 
@@ -317,7 +392,7 @@ async function findBestCategoryStream(
           };
         });
 
-      const language = resolveLanguageCode(requestedCategory, episode.audio);
+      const language = resolveLanguageCode(requestedCategory, task.episode.audio);
       const selected = hlsCandidate?.url ? hlsCandidate : fileCandidate;
       const referer = selected?.referer;
       const origin = getOriginFromReferer(referer);
@@ -363,25 +438,19 @@ async function findBestCategoryStream(
         isHls,
       };
 
-      if (!bestCandidate) {
-        bestCandidate = candidate;
-        continue;
-      }
-
-      if (candidate.captionCount > bestCandidate.captionCount) {
-        bestCandidate = candidate;
-        continue;
-      }
-
-      if (candidate.captionCount === bestCandidate.captionCount && candidate.isHls && !bestCandidate.isHls) {
+      if (isBetterCandidate(candidate, bestCandidate)) {
         bestCandidate = candidate;
       }
-    }
 
-    if (bestCandidate?.captionCount && bestCandidate.isHls) {
-      break;
+      if (bestCandidate?.captionCount && bestCandidate.isHls) {
+        stopEarly = true;
+        return;
+      }
     }
   }
+
+  const workerCount = Math.min(MIRURO_MAX_CONCURRENT_SOURCE_ATTEMPTS, tasks.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
   return bestCandidate;
 }
@@ -414,13 +483,26 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
   ctx.progress(60);
 
   const outputStreams: NonNullable<SourcererOutput['stream']> = [];
+  const sourceAttemptCache: SourceAttemptCache = new Map();
 
   const japaneseEpisodeCandidates = mergeEpisodeCandidates(episodesByCategory, ['ssub', 'sub']);
   if (japaneseEpisodeCandidates.length > 0) {
-    const japaneseSsub = await findBestCategoryStream(ctx, providers, 'ssub', japaneseEpisodeCandidates);
+    const japaneseSsub = await findBestCategoryStream(
+      ctx,
+      providers,
+      'ssub',
+      japaneseEpisodeCandidates,
+      sourceAttemptCache,
+    );
     const japaneseSub = japaneseSsub
       ? undefined
-      : await findBestCategoryStream(ctx, providers, 'sub', japaneseEpisodeCandidates);
+      : await findBestCategoryStream(
+          ctx,
+          providers,
+          'sub',
+          japaneseEpisodeCandidates,
+          sourceAttemptCache,
+        );
     const chosenJapanese = japaneseSsub ?? japaneseSub;
     if (chosenJapanese) {
       outputStreams.push(chosenJapanese.stream);
@@ -429,7 +511,7 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
 
   const dubEpisodeCandidates = episodesByCategory.dub ?? [];
   if (dubEpisodeCandidates.length > 0) {
-    const dub = await findBestCategoryStream(ctx, providers, 'dub', dubEpisodeCandidates);
+    const dub = await findBestCategoryStream(ctx, providers, 'dub', dubEpisodeCandidates, sourceAttemptCache);
     if (dub) {
       outputStreams.push(dub.stream);
     }
