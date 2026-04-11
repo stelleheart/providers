@@ -105,7 +105,7 @@ async function comboScraper(ctx: ShowScrapeContext | MovieScrapeContext): Promis
 export const vidlinkScraper = makeSourcerer({
   id: 'vidlink',
   name: 'VidLink 🔥',
-  rank: 310,
+  rank: 999,
   disabled: false,
   flags: [],
   scrapeMovie: comboScraper,

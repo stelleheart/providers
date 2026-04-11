@@ -60,7 +60,7 @@ async function comboScraper(ctx: ShowScrapeContext | MovieScrapeContext): Promis
 export const rgshowsScraper = makeSourcerer({
   id: 'rgshows',
   name: 'RGShows',
-  rank: 203,
+  rank: 202,
   flags: [],
   scrapeMovie: comboScraper,
   scrapeShow: comboScraper,
