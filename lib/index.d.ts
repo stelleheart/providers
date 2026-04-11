@@ -55,6 +55,7 @@ type ThumbnailTrack = {
 };
 type StreamCommon = {
   id: string;
+  language?: string;
   flags: Flags[];
   captions: Caption[];
   thumbnailTrack?: ThumbnailTrack;

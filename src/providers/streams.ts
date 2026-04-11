@@ -1,5 +1,5 @@
-import { Flags } from '@/entrypoint/utils/targets';
-import { Caption } from '@/providers/captions';
+import type { Flags } from '@/entrypoint/utils/targets';
+import type { Caption } from '@/providers/captions';
 
 export type StreamFile = {
   type: 'mp4';
@@ -15,6 +15,7 @@ type ThumbnailTrack = {
 
 type StreamCommon = {
   id: string; // only unique per output
+  language?: string; // ISO language tag for this stream's primary audio
   flags: Flags[];
   captions: Caption[];
   thumbnailTrack?: ThumbnailTrack;

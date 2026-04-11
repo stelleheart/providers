@@ -407,6 +407,7 @@ async function findBestCategoryStream(
         isHls = true;
         stream = {
           id: `miruro-${language}-${requestedCategory}-hls`,
+          language,
           type: 'hls',
           playlist: createM3U8ProxyUrl(hlsCandidate.url, ctx.features, streamHeaders),
           headers: Object.keys(streamHeaders).length > 0 ? streamHeaders : undefined,
@@ -417,6 +418,7 @@ async function findBestCategoryStream(
       } else if (fileCandidate?.url) {
         stream = {
           id: `miruro-${language}-${requestedCategory}-file`,
+          language,
           type: 'file',
           qualities: {
             unknown: {
