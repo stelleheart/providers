@@ -84,6 +84,7 @@ import { FedAPIDBScraper } from './sources/fedapidb';
 import { fullhdfilmizleScraper } from './sources/fullhdfilmizle';
 import { hdRezkaScraper } from './sources/hdrezka';
 import { lookmovieScraper } from './sources/lookmovie';
+import { miruroScraper } from './sources/miruro';
 import { movies4fScraper } from './sources/movies4f';
 import { myanimeScraper } from './sources/myanime';
 import { nunflixScraper } from './sources/nunflix';
@@ -133,6 +134,7 @@ export function gatherAllSources(): Array<Sourcerer> {
     wecimaScraper,
     animeflvScraper,
     oneanimeScraper,
+    miruroScraper,
     animepaheScraper,
     animekaiScraper,
     FedAPIScraper,
