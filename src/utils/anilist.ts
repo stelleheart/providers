@@ -70,7 +70,7 @@ export async function getAnilistIdFromMedia(ctx: ScrapeContext, media: MovieMedi
     body: JSON.stringify({
       query: anilistQuery,
       variables: {
-        search: media.title,
+        search: media.title.toLowerCase().replace("the movie", "").replace("the show", "").trim(),
         type: 'ANIME',
       },
     }),
