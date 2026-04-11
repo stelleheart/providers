@@ -23,7 +23,16 @@ type ScrapeCtx = ShowScrapeContext | MovieScrapeContext;
 type CompressionKind = 'gzip' | 'zlib' | 'raw';
 
 type MiruroConfigResponse = {
-  streaming?: Record<string, { visible?: boolean, capabilities: {sub: boolean, ssub: boolean} }>;
+  streaming?: Record<
+    string,
+    {
+      visible?: boolean;
+      capabilities?: {
+        sub?: boolean;
+        ssub?: boolean;
+      };
+    }
+  >;
   providerOrder?: string[];
 };
 
@@ -220,6 +229,22 @@ function getProviderOrder(config: MiruroConfigResponse): string[] {
   const candidates = preferredOrder.length > 0 ? preferredOrder : fallbackOrder;
 
   return candidates.filter((providerId) => config.streaming?.[providerId]?.visible !== false);
+}
+
+function getJapaneseAttemptCategories(config: MiruroConfigResponse, providerId: string): string[] {
+  const caps = config.streaming?.[providerId]?.capabilities;
+  if (!caps) return ['ssub', 'sub'];
+
+  const categories: string[] = [];
+  if (caps.ssub) categories.push('ssub');
+  if (caps.sub) categories.push('sub');
+
+  // If capabilities are missing/incorrect, keep a safe fallback to avoid false negatives.
+  if (categories.length === 0) {
+    return ['ssub', 'sub'];
+  }
+
+  return categories;
 }
 
 function collectEpisodeCandidatesByCategory(
@@ -419,10 +444,10 @@ async function getSourcesForAttempt(
 async function resolveCategoryStream(
   ctx: ScrapeCtx,
   providers: string[],
-  category: string,
   episodeCandidates: EpisodeCandidate[],
   anilistId: number,
   sourceAttemptCache: SourceAttemptCache,
+  getAttemptCategoriesForProvider: (providerId: string) => string[],
 ): Promise<CategoryPick | undefined> {
   let firstPlayable: CategoryPick | undefined;
 
@@ -431,25 +456,30 @@ async function resolveCategoryStream(
     const providerEpisodes = episodeCandidates.filter((episode) => episode.providerId === providerId);
     if (providerEpisodes.length === 0) continue;
 
+    const attemptCategories = getAttemptCategoriesForProvider(providerId);
+    if (attemptCategories.length === 0) continue;
+
     for (const episode of providerEpisodes) {
-      const sourcesData = await getSourcesForAttempt(
-        ctx,
-        category,
-        providerId,
-        episode.id,
-        anilistId,
-        sourceAttemptCache,
-      );
-      if (!sourcesData) continue;
+      for (const category of attemptCategories) {
+        const sourcesData = await getSourcesForAttempt(
+          ctx,
+          category,
+          providerId,
+          episode.id,
+          anilistId,
+          sourceAttemptCache,
+        );
+        if (!sourcesData) continue;
 
-      const mapped = mapSourceToStream(ctx, category, episode, sourcesData);
-      if (!mapped) continue;
+        const mapped = mapSourceToStream(ctx, category, episode, sourcesData);
+        if (!mapped) continue;
 
-      if (!providerPlayable) {
-        providerPlayable = mapped;
-      }
-      if (mapped.hasCaptions) {
-        return mapped;
+        if (!providerPlayable) {
+          providerPlayable = mapped;
+        }
+        if (mapped.hasCaptions) {
+          return mapped;
+        }
       }
     }
 
@@ -464,31 +494,43 @@ async function resolveCategoryStream(
 
   // Fallback: some titles expose episode IDs that only work with their own provider key.
   // Keep provider-order as primary strategy, but try candidate-origin provider as recovery.
+  let fallbackPlayable: CategoryPick | undefined;
+  const orderedProviderSet = new Set(providers);
   const fallbackProviders = Array.from(new Set(episodeCandidates.map((candidate) => candidate.providerId))).filter(
-    (providerId) => !!providerId,
+    (providerId) => !!providerId && !orderedProviderSet.has(providerId),
   );
 
   for (const providerId of fallbackProviders) {
     const providerEpisodes = episodeCandidates.filter((episode) => episode.providerId === providerId);
-    for (const episode of providerEpisodes) {
-      const sourcesData = await getSourcesForAttempt(
-        ctx,
-        category,
-        providerId,
-        episode.id,
-        anilistId,
-        sourceAttemptCache,
-      );
-      if (!sourcesData) continue;
+    const attemptCategories = getAttemptCategoriesForProvider(providerId);
+    if (attemptCategories.length === 0) continue;
 
-      const mapped = mapSourceToStream(ctx, category, episode, sourcesData);
-      if (mapped) {
-        return mapped;
+    for (const episode of providerEpisodes) {
+      for (const category of attemptCategories) {
+        const sourcesData = await getSourcesForAttempt(
+          ctx,
+          category,
+          providerId,
+          episode.id,
+          anilistId,
+          sourceAttemptCache,
+        );
+        if (!sourcesData) continue;
+
+        const mapped = mapSourceToStream(ctx, category, episode, sourcesData);
+        if (!mapped) continue;
+
+        if (!fallbackPlayable) {
+          fallbackPlayable = mapped;
+        }
+        if (mapped.hasCaptions) {
+          return mapped;
+        }
       }
     }
   }
 
-  return undefined;
+  return fallbackPlayable;
 }
 
 async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
@@ -507,13 +549,11 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
   ctx.progress(35);
 
   const providers = getProviderOrder(config);
-  console.debug(`[Miruro] Providers in order: ${providers.join(', ')}`);
   if (providers.length === 0) {
     throw new NotFoundError('Miruro returned no streaming providers');
   }
 
   const episodesByCategory = collectEpisodeCandidatesByCategory(episodesResponse, targetEpisode);
-  console.debug(`[Miruro] Episodes by category: ${JSON.stringify(episodesByCategory)}`);
 
   if (Object.keys(episodesByCategory).length === 0) {
     throw new NotFoundError(`Miruro episode ${targetEpisode} was not found`);
@@ -523,17 +563,17 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
   const outputStreams: NonNullable<SourcererOutput['stream']> = [];
   const sourceAttemptCache: SourceAttemptCache = new Map();
 
-  const japaneseCategory = episodesByCategory.ssub?.length ? 'ssub' : 'sub';
-  const japaneseEpisodes = episodesByCategory[japaneseCategory] ?? [];
-  console.debug(`[Miruro] Japanese episode candidates: ${JSON.stringify(japaneseEpisodes)} (category: ${japaneseCategory})`);
+  // Miruro episode lists expose only sub/dub categories.
+  // We still prefer fetching ssub streams when provider capabilities allow it.
+  const japaneseEpisodes = episodesByCategory.sub ?? [];
   if (japaneseEpisodes.length > 0) {
     const japanese = await resolveCategoryStream(
       ctx,
       providers,
-      japaneseCategory,
       japaneseEpisodes,
       anilistId,
       sourceAttemptCache,
+      (providerId) => getJapaneseAttemptCategories(config, providerId),
     );
     if (japanese) {
       outputStreams.push(japanese.stream);
@@ -542,9 +582,15 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
   ctx.progress(70);
 
   const dubEpisodes = episodesByCategory.dub ?? [];
-  console.debug(`[Miruro] Dub episode candidates: ${JSON.stringify(dubEpisodes)}`);
   if (dubEpisodes.length > 0) {
-    const dub = await resolveCategoryStream(ctx, providers, 'dub', dubEpisodes, anilistId, sourceAttemptCache);
+    const dub = await resolveCategoryStream(
+      ctx,
+      providers,
+      dubEpisodes,
+      anilistId,
+      sourceAttemptCache,
+      () => ['dub'],
+    );
     if (dub) {
       outputStreams.push(dub.stream);
     }
@@ -556,7 +602,6 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
   }
 
   ctx.progress(98);
-  console.debug(`[Miruro] Selected streams: ${JSON.stringify(outputStreams)}`);
   return {
     embeds: [],
     stream: outputStreams,
@@ -564,9 +609,9 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
 }
 
 export const miruroScraper = makeSourcerer({
-  id: 'mirurov2',
+  id: 'miruro',
   name: 'Miruro',
-  rank: 999,
+  rank: 299,
   flags: [flags.CORS_ALLOWED],
   scrapeMovie: scrapeMiruro,
   scrapeShow: scrapeMiruro,
