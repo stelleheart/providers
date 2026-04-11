@@ -736,6 +736,7 @@ async function scrape1anime(ctx: ScrapeCtx): Promise<SourcererOutput> {
 			if (supported) {
 				hlsStreams.push({
 					id: language === "eng" ? "eng-audio" : "jpn-audio",
+					language,
 					type: "hls",
 					playlist: createM3U8ProxyUrl(
 						bestHls.url,
@@ -755,6 +756,7 @@ async function scrape1anime(ctx: ScrapeCtx): Promise<SourcererOutput> {
 		if (Object.keys(fileByQuality).length > 0) {
 			fileStreams.push({
 				id: language === "eng" ? "eng-audio-file" : "jpn-audio-file",
+				language,
 				type: "file",
 				qualities: fileByQuality,
 				headers: referer ? { Referer: referer } : undefined,
@@ -788,7 +790,7 @@ async function scrape1anime(ctx: ScrapeCtx): Promise<SourcererOutput> {
 export const oneanimeScraper = makeSourcerer({
 	id: "1anime",
 	name: "1Anime 🔥",
-	rank: 202,
+	rank: 203,
 	disabled: false,
 	flags: [flags.CORS_ALLOWED],
 	scrapeShow: scrape1anime,
