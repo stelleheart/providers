@@ -175,17 +175,68 @@ function inferCaptionType(url: string, format?: string): CaptionType {
   return 'vtt';
 }
 
-function resolveLanguageCode(category: string, episodeAudio?: string): string {
-  if (category.toLowerCase() === 'sub' || category.toLowerCase() === 'ssub') return 'ja';
-  if (category.toLowerCase() === 'dub') return 'en';
+const ISO6391_TO_6392: Record<string, string> = {
+  ar: 'ara',
+  bg: 'bul',
+  bn: 'ben',
+  bs: 'bos',
+  cs: 'ces',
+  da: 'dan',
+  de: 'deu',
+  el: 'ell',
+  en: 'eng',
+  es: 'spa',
+  et: 'est',
+  fa: 'fas',
+  fi: 'fin',
+  fr: 'fra',
+  he: 'heb',
+  hr: 'hrv',
+  hu: 'hun',
+  id: 'ind',
+  it: 'ita',
+  ja: 'jpn',
+  ko: 'kor',
+  nl: 'nld',
+  no: 'nor',
+  pl: 'pol',
+  pt: 'por',
+  ro: 'ron',
+  ru: 'rus',
+  sl: 'slv',
+  sr: 'srp',
+  sv: 'swe',
+  th: 'tha',
+  tl: 'tgl',
+  tr: 'tur',
+  ur: 'urd',
+  zh: 'zho',
+};
 
-  const candidate = (episodeAudio || category).trim();
-  if (/^[a-z]{2}(-[a-z]{2})?$/i.test(candidate)) {
-    return candidate.toLowerCase();
+function toIso6392(codeOrLabel: string): string {
+  const normalized = codeOrLabel.trim().toLowerCase();
+  if (/^[a-z]{3}$/i.test(normalized)) {
+    return normalized;
   }
 
-  const mapped = labelToLanguageCode(candidate) || labelToLanguageCode(candidate.toLowerCase());
-  return mapped?.toLowerCase() ?? 'unknown';
+  const primary = normalized.split('-')[0];
+  if (/^[a-z]{2}$/i.test(primary)) {
+    return ISO6391_TO_6392[primary] ?? 'und';
+  }
+
+  const mapped = labelToLanguageCode(codeOrLabel) || labelToLanguageCode(normalized);
+  if (!mapped) return 'und';
+
+  const mappedPrimary = mapped.toLowerCase().split('-')[0];
+  return ISO6391_TO_6392[mappedPrimary] ?? 'und';
+}
+
+function resolveLanguageCode(category: string, episodeAudio?: string): string {
+  if (category.toLowerCase() === 'sub' || category.toLowerCase() === 'ssub') return 'jpn';
+  if (category.toLowerCase() === 'dub') return 'eng';
+
+  const candidate = episodeAudio || category;
+  return toIso6392(candidate);
 }
 
 function getOriginFromReferer(referer?: string): string | undefined {

@@ -15,7 +15,7 @@ type ThumbnailTrack = {
 
 type StreamCommon = {
   id: string; // only unique per output
-  language?: string; // ISO language tag for this stream's primary audio
+  language?: string; // ISO 639-2 language code for this stream's primary audio (e.g. eng, jpn)
   flags: Flags[];
   captions: Caption[];
   thumbnailTrack?: ThumbnailTrack;
