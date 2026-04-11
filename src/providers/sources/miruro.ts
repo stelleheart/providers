@@ -23,7 +23,7 @@ type ScrapeCtx = ShowScrapeContext | MovieScrapeContext;
 type CompressionKind = 'gzip' | 'zlib' | 'raw';
 
 type MiruroConfigResponse = {
-  streaming?: Record<string, { visible?: boolean }>;
+  streaming?: Record<string, { visible?: boolean, capabilities: {sub: boolean, ssub: boolean} }>;
   providerOrder?: string[];
 };
 
@@ -513,7 +513,7 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
   }
 
   const episodesByCategory = collectEpisodeCandidatesByCategory(episodesResponse, targetEpisode);
-  console.debug(`[Miruro] Episodes by category: ${(episodesByCategory)}`);
+  console.debug(`[Miruro] Episodes by category: ${JSON.stringify(episodesByCategory)}`);
 
   if (Object.keys(episodesByCategory).length === 0) {
     throw new NotFoundError(`Miruro episode ${targetEpisode} was not found`);
@@ -525,7 +525,7 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
 
   const japaneseCategory = episodesByCategory.ssub?.length ? 'ssub' : 'sub';
   const japaneseEpisodes = episodesByCategory[japaneseCategory] ?? [];
-  console.debug(`[Miruro] Japanese episode candidates: ${(japaneseEpisodes)} (category: ${japaneseCategory})`);
+  console.debug(`[Miruro] Japanese episode candidates: ${JSON.stringify(japaneseEpisodes)} (category: ${japaneseCategory})`);
   if (japaneseEpisodes.length > 0) {
     const japanese = await resolveCategoryStream(
       ctx,
@@ -542,7 +542,7 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
   ctx.progress(70);
 
   const dubEpisodes = episodesByCategory.dub ?? [];
-  console.debug(`[Miruro] Dub episode candidates: ${(dubEpisodes)}`);
+  console.debug(`[Miruro] Dub episode candidates: ${JSON.stringify(dubEpisodes)}`);
   if (dubEpisodes.length > 0) {
     const dub = await resolveCategoryStream(ctx, providers, 'dub', dubEpisodes, anilistId, sourceAttemptCache);
     if (dub) {
@@ -556,7 +556,7 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
   }
 
   ctx.progress(98);
-  console.debug(`[Miruro] Selected streams: ${(outputStreams)}`);
+  console.debug(`[Miruro] Selected streams: ${JSON.stringify(outputStreams)}`);
   return {
     embeds: [],
     stream: outputStreams,
@@ -564,7 +564,7 @@ async function scrapeMiruro(ctx: ScrapeCtx): Promise<SourcererOutput> {
 }
 
 export const miruroScraper = makeSourcerer({
-  id: 'miruro',
+  id: 'mirurov2',
   name: 'Miruro',
   rank: 999,
   flags: [flags.CORS_ALLOWED],
