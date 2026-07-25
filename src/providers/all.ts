@@ -82,6 +82,7 @@ import { embedsuScraper } from './sources/embedsu';
 import { FedAPIScraper } from './sources/fedapi';
 import { FedAPIDBScraper } from './sources/fedapidb';
 import { fullhdfilmizleScraper } from './sources/fullhdfilmizle';
+import { goatedScraper } from './sources/goated';
 import { hdRezkaScraper } from './sources/hdrezka';
 import { lookmovieScraper } from './sources/lookmovie';
 import { miruroScraper } from './sources/miruro';
@@ -98,6 +99,7 @@ import { streamboxScraper } from './sources/streambox';
 import { turbovidSourceScraper } from './sources/turbovid';
 import { vidapiClickScraper } from './sources/vidapiclick';
 import { vidifyScraper } from './sources/vidify';
+import { vidkingScraper } from './sources/vidking';
 import { vidlinkScraper } from './sources/vidlink';
 import { vidnestScraper } from './sources/vidnest';
 import { vidrockScraper } from './sources/vidrock';
@@ -154,6 +156,8 @@ export function gatherAllSources(): Array<Sourcerer> {
     debridScraper,
     cinehdplusScraper,
     fullhdfilmizleScraper,
+    goatedScraper,
+    vidkingScraper,
     vidlinkScraper,
     vidrockScraper,
     watchanimeworldScraper,
