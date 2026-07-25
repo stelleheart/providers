@@ -184,7 +184,7 @@ export const vidkingScraper = makeSourcerer({
   id: 'vidking',
   name: 'Vidking',
   rank: 998,
-  flags: [flags.CORS_ALLOWED],
+  flags: [],
   scrapeMovie: comboScraper,
   scrapeShow: comboScraper,
 });
