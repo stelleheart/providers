@@ -1,7 +1,9 @@
-import { flags } from '@/entrypoint/utils/targets';
+import { FeatureMap, flags } from '@/entrypoint/utils/targets';
 import { SourcererOutput, makeSourcerer } from '@/providers/base';
+import { Stream } from '@/providers/streams';
 import { MovieScrapeContext, ShowScrapeContext } from '@/utils/context';
 import { NotFoundError } from '@/utils/errors';
+import { createM3U8ProxyUrl } from '@/utils/proxy';
 
 const API_BASE = 'https://api.speedracelight.com';
 const DB_BASE = 'https://db.speedracelight.com/3';
@@ -10,6 +12,10 @@ const headers = {
   Referer: 'https://www.vidking.net/',
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+};
+const streamHeaders = {
+  Origin: 'https://vidking.net',
+  Referer: 'https://vidking.net',
 };
 const MIX_CONSTANT = 2654435769;
 const HASH_CONSTANTS = [
@@ -109,6 +115,29 @@ export function decryptVidkingPayload(payload: string, seed: string, mediaId: nu
   return JSON.parse(new TextDecoder().decode(bytes.subarray(4)));
 }
 
+export function mapVidkingStreams(data: VidkingData, features: FeatureMap): Stream[] {
+  const captions = (data.subtitles ?? [])
+    .filter((subtitle) => subtitle.url)
+    .map((subtitle) => ({
+      id: subtitle.url as string,
+      url: subtitle.url as string,
+      language: subtitle.language || subtitle.lang || 'unknown',
+      type: 'vtt' as const,
+      hasCorsRestrictions: false,
+    }));
+  return (data.sources ?? [])
+    .filter((source) => source.url?.includes('.m3u8'))
+    .map((source, index) => ({
+      id: `vidking-${source.quality || index}`,
+      type: 'hls',
+      playlist: createM3U8ProxyUrl(source.url as string, features, streamHeaders),
+      headers: streamHeaders,
+      proxyDepth: 2,
+      flags: [flags.CORS_ALLOWED],
+      captions,
+    }));
+}
+
 async function comboScraper(ctx: ShowScrapeContext | MovieScrapeContext): Promise<SourcererOutput> {
   const mediaId = Number(ctx.media.tmdbId);
   const mediaType = ctx.media.type === 'movie' ? 'movie' : 'tv';
@@ -146,24 +175,7 @@ async function comboScraper(ctx: ShowScrapeContext | MovieScrapeContext): Promis
     },
   });
   const data = decryptVidkingPayload(payload, seed, mediaId);
-  const captions = (data.subtitles ?? [])
-    .filter((subtitle) => subtitle.url)
-    .map((subtitle) => ({
-      id: subtitle.url as string,
-      url: subtitle.url as string,
-      language: subtitle.language || subtitle.lang || 'unknown',
-      type: 'vtt' as const,
-      hasCorsRestrictions: false,
-    }));
-  const streams = (data.sources ?? [])
-    .filter((source) => source.url?.includes('.m3u8'))
-    .map((source, index) => ({
-      id: `vidking-${source.quality || index}`,
-      type: 'hls' as const,
-      playlist: source.url as string,
-      flags: [flags.CORS_ALLOWED],
-      captions,
-    }));
+  const streams = mapVidkingStreams(data, ctx.features);
   if (streams.length === 0) throw new NotFoundError('No Vidking streams found');
   return { embeds: [], stream: streams };
 }
