@@ -69,6 +69,7 @@ import { warezcdnembedMp4Scraper } from './embeds/warezcdn/mp4';
 import { warezPlayerScraper } from './embeds/warezcdn/warezplayer';
 import { zunimeEmbeds } from './embeds/zunime';
 import { oneanimeScraper } from './sources/1anime';
+import { sixtySevenMoviesScraper } from './sources/67movies';
 import { EightStreamScraper } from './sources/8stream';
 import { animeflvScraper } from './sources/animeflv';
 import { animekaiScraper } from './sources/animekai';
@@ -111,6 +112,7 @@ import { zunimeScraper } from './sources/zunime';
 export function gatherAllSources(): Array<Sourcerer> {
   // all sources are gathered here
   return [
+    sixtySevenMoviesScraper,
     fsOnlineScraper,
     dopeboxScraper,
     cuevana3Scraper,
